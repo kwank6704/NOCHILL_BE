@@ -1,9 +1,14 @@
 -- ============================================================
 --  NO CHILL — Anti-Mindfulness database schema (SQLite)
 --  Latest shape of every table. Existing databases are upgraded by
---  backend/src/db.js (PRAGMA user_version tracks the schema version).
---  Connection PRAGMAs live in db.js — they can't run inside a transaction.
+--  src/db.js; the `meta` table tracks the schema version (Turso-friendly,
+--  unlike PRAGMA user_version). Connection PRAGMAs live in db.js.
 -- ============================================================
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 
 -- คำด่าแทนใจของโค้ช (Passive Aggressive Breathing)
 CREATE TABLE IF NOT EXISTS roasts (

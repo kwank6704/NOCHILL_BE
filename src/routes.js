@@ -27,79 +27,83 @@ function finiteNumber(value, name) {
   return n;
 }
 
-export function createRouter(db) {
+const SQL = {
+  roastsAll: 'SELECT id, category, text, spice FROM roasts ORDER BY category, id',
+  roastRandom: 'SELECT id, category, text, spice FROM roasts WHERE category = ? ORDER BY RANDOM() LIMIT 1',
+  roastEvent: 'INSERT INTO roast_events (client_id, category) VALUES (?, ?)',
+  insertSession: `
+    INSERT INTO sessions (client_id, mode, hold_ms, peak_pressure, items_destroyed, damage_baht, keystrokes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  insertSmash: 'INSERT INTO smashes (session_id, item, count) VALUES (?, ?, ?)',
+  insertGrievance: 'INSERT INTO grievances (session_id, text, shred_style, is_public) VALUES (?, ?, ?, ?)',
+  totals: `
+    SELECT COUNT(*)                          AS sessions,
+           COALESCE(SUM(items_destroyed), 0) AS itemsDestroyed,
+           COALESCE(SUM(damage_baht), 0)     AS damageBaht,
+           COALESCE(AVG(hold_ms), 0)         AS avgHoldMs,
+           COALESCE(MAX(peak_pressure), 0)   AS maxPressure,
+           COALESCE(AVG(peak_pressure), 0)   AS avgPressure,
+           COALESCE(SUM(keystrokes), 0)      AS keystrokes
+    FROM sessions WHERE (:cid IS NULL OR client_id = :cid)`,
+  grievanceCount: `
+    SELECT COUNT(*) AS n FROM grievances g
+    LEFT JOIN sessions s ON s.id = g.session_id
+    WHERE (:cid IS NULL OR s.client_id = :cid)`,
+  roastCount: 'SELECT COUNT(*) AS n FROM roast_events WHERE (:cid IS NULL OR client_id = :cid)',
+  items: 'SELECT item, SUM(count) AS count FROM smashes GROUP BY item ORDER BY count DESC',
+  daily: `
+    SELECT date(created_at) AS day,
+           SUM(mode = 'rage')     AS rage,
+           SUM(mode = 'shredder') AS shredder,
+           SUM(mode = 'mash')     AS mash
+    FROM sessions WHERE created_at >= date('now', '-13 days')
+    GROUP BY day ORDER BY day`,
+  pressure: `
+    SELECT MIN(CAST(peak_pressure / 10 AS INTEGER), 9) AS bucket, COUNT(*) AS n
+    FROM sessions GROUP BY bucket ORDER BY bucket`,
+  shame: 'SELECT category, COUNT(*) AS n FROM roast_events GROUP BY category ORDER BY n DESC',
+  grievances: `
+    SELECT id, text, shred_style AS style, created_at AS createdAt
+    FROM grievances WHERE is_public = 1
+    ORDER BY created_at DESC, id DESC LIMIT ?`,
+};
+
+// libSQL rows are array-like objects; spread them into plain JSON-friendly objects.
+const plain = (row) => (row ? { ...row } : null);
+
+/** `getDb()` resolves to { db, storage } once the database is open and migrated. */
+export function createRouter(getDb) {
   const r = Router();
 
-  const q = {
-    roastsAll: db.prepare('SELECT id, category, text, spice FROM roasts ORDER BY category, id'),
-    roastRandom: db.prepare('SELECT id, category, text, spice FROM roasts WHERE category = ? ORDER BY RANDOM() LIMIT 1'),
-    roastEvent: db.prepare('INSERT INTO roast_events (client_id, category) VALUES (?, ?)'),
-    insertSession: db.prepare(`
-      INSERT INTO sessions (client_id, mode, hold_ms, peak_pressure, items_destroyed, damage_baht, keystrokes)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`),
-    insertSmash: db.prepare('INSERT INTO smashes (session_id, item, count) VALUES (?, ?, ?)'),
-    insertGrievance: db.prepare(
-      'INSERT INTO grievances (session_id, text, shred_style, is_public) VALUES (?, ?, ?, ?)',
-    ),
-    totals: db.prepare(`
-      SELECT COUNT(*)                          AS sessions,
-             COALESCE(SUM(items_destroyed), 0) AS itemsDestroyed,
-             COALESCE(SUM(damage_baht), 0)     AS damageBaht,
-             COALESCE(AVG(hold_ms), 0)         AS avgHoldMs,
-             COALESCE(MAX(peak_pressure), 0)   AS maxPressure,
-             COALESCE(AVG(peak_pressure), 0)   AS avgPressure,
-             COALESCE(SUM(keystrokes), 0)      AS keystrokes
-      FROM sessions WHERE (:cid IS NULL OR client_id = :cid)`),
-    grievanceCount: db.prepare(`
-      SELECT COUNT(*) AS n FROM grievances g
-      LEFT JOIN sessions s ON s.id = g.session_id
-      WHERE (:cid IS NULL OR s.client_id = :cid)`),
-    roastCount: db.prepare('SELECT COUNT(*) AS n FROM roast_events WHERE (:cid IS NULL OR client_id = :cid)'),
-    items: db.prepare(`
-      SELECT item, SUM(count) AS count FROM smashes
-      GROUP BY item ORDER BY count DESC`),
-    daily: db.prepare(`
-      SELECT date(created_at) AS day,
-             SUM(mode = 'rage')     AS rage,
-             SUM(mode = 'shredder') AS shredder,
-             SUM(mode = 'mash')     AS mash
-      FROM sessions WHERE created_at >= date('now', '-13 days')
-      GROUP BY day ORDER BY day`),
-    pressure: db.prepare(`
-      SELECT MIN(CAST(peak_pressure / 10 AS INTEGER), 9) AS bucket, COUNT(*) AS n
-      FROM sessions GROUP BY bucket ORDER BY bucket`),
-    shame: db.prepare(`
-      SELECT category, COUNT(*) AS n FROM roast_events
-      GROUP BY category ORDER BY n DESC`),
-    grievances: db.prepare(`
-      SELECT id, text, shred_style AS style, created_at AS createdAt
-      FROM grievances WHERE is_public = 1
-      ORDER BY created_at DESC, id DESC LIMIT ?`),
-  };
+  const all = async (sql, args = []) => (await (await getDb()).db.execute({ sql, args })).rows.map(plain);
+  const one = async (sql, args = []) => plain((await (await getDb()).db.execute({ sql, args })).rows[0]);
 
-  r.get('/health', (_req, res) => res.json({ ok: true, chill: false }));
+  r.get('/health', async (_req, res) => {
+    const { storage } = await getDb();
+    res.json({ ok: true, chill: false, storage });
+  });
 
-  r.get('/roasts', (_req, res) => {
+  r.get('/roasts', async (_req, res) => {
     const grouped = {};
-    for (const row of q.roastsAll.all()) (grouped[row.category] ??= []).push(row);
+    for (const row of await all(SQL.roastsAll)) (grouped[row.category] ??= []).push(row);
     res.json(grouped);
   });
 
-  r.get('/roasts/random', (req, res) => {
+  r.get('/roasts/random', async (req, res) => {
     const category = String(req.query.category ?? '');
     if (!ROAST_CATEGORIES.has(category)) throw new HttpError(400, 'ไม่รู้จักหมวดคำแซะนี้');
-    res.json(q.roastRandom.get(category) ?? null);
+    res.json(await one(SQL.roastRandom, [category]));
   });
 
-  r.post('/roasts/events', (req, res) => {
+  r.post('/roasts/events', async (req, res) => {
     const clientId = requireClientId(req.body?.clientId);
     const category = String(req.body?.category ?? '');
     if (!ROAST_CATEGORIES.has(category)) throw new HttpError(400, 'ไม่รู้จักหมวดคำแซะนี้');
-    q.roastEvent.run(clientId, category);
+    await all(SQL.roastEvent, [clientId, category]);
     res.status(201).json({ ok: true });
   });
 
-  r.post('/sessions', (req, res) => {
+  r.post('/sessions', async (req, res) => {
     const body = req.body ?? {};
     const clientId = requireClientId(body.clientId);
     const mode = String(body.mode);
@@ -138,38 +142,57 @@ export function createRouter(db) {
     const itemsDestroyed = Object.values(tally).reduce((a, b) => a + b, 0);
     const damageBaht = Object.entries(tally).reduce((a, [it, c]) => a + ITEM_PRICES[it] * c, 0);
 
-    db.exec('BEGIN');
+    const { db } = await getDb();
+    const tx = await db.transaction('write');
     let sessionId;
     try {
-      sessionId = Number(
-        q.insertSession.run(clientId, mode, holdMs, peakPressure, itemsDestroyed, damageBaht, keystrokes).lastInsertRowid,
-      );
-      for (const [item, count] of Object.entries(tally)) q.insertSmash.run(sessionId, item, count);
-      if (grievance) q.insertGrievance.run(sessionId, grievance.text, grievance.style, grievance.isPublic);
-      db.exec('COMMIT');
+      const rs = await tx.execute({
+        sql: SQL.insertSession,
+        args: [clientId, mode, holdMs, peakPressure, itemsDestroyed, damageBaht, keystrokes],
+      });
+      sessionId = Number(rs.lastInsertRowid);
+      for (const [item, count] of Object.entries(tally)) await tx.execute({ sql: SQL.insertSmash, args: [sessionId, item, count] });
+      if (grievance) {
+        await tx.execute({ sql: SQL.insertGrievance, args: [sessionId, grievance.text, grievance.style, grievance.isPublic] });
+      }
+      await tx.commit();
     } catch (err) {
-      db.exec('ROLLBACK');
+      await tx.rollback().catch(() => {});
       throw err;
+    } finally {
+      tx.close();
     }
 
     res.status(201).json({
       id: sessionId,
       itemsDestroyed,
       damageBaht,
-      roast: q.roastRandom.get(mode === 'mash' && Math.random() < 0.5 ? 'mash' : 'done') ?? null,
+      roast: await one(SQL.roastRandom, [mode === 'mash' && Math.random() < 0.5 ? 'mash' : 'done']),
     });
   });
 
-  r.get('/stats', (req, res) => {
+  r.get('/stats', async (req, res) => {
     const clientId = req.query.clientId ? requireClientId(String(req.query.clientId)) : null;
-    const summarize = (id) => ({
-      ...q.totals.get({ cid: id }),
-      grievances: q.grievanceCount.get({ cid: id }).n,
-      roasted: q.roastCount.get({ cid: id }).n,
-    });
+    const summarize = async (cid) => {
+      const [totals, g, rc] = await Promise.all([
+        one(SQL.totals, { cid }),
+        one(SQL.grievanceCount, { cid }),
+        one(SQL.roastCount, { cid }),
+      ]);
+      return { ...totals, grievances: g.n, roasted: rc.n };
+    };
+
+    const [global, me, items, dailyRows, pressureRows, shame] = await Promise.all([
+      summarize(null),
+      clientId ? summarize(clientId) : null,
+      all(SQL.items),
+      all(SQL.daily),
+      all(SQL.pressure),
+      all(SQL.shame),
+    ]);
 
     // Fill gaps so the chart always shows 14 consecutive days.
-    const byDay = new Map(q.daily.all().map((d) => [d.day, d]));
+    const byDay = new Map(dailyRows.map((d) => [d.day, d]));
     const daily = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
@@ -178,26 +201,25 @@ export function createRouter(db) {
     }
 
     const pressure = Array.from({ length: 10 }, () => 0);
-    for (const { bucket, n } of q.pressure.all()) pressure[bucket] = n;
+    for (const { bucket, n } of pressureRows) pressure[bucket] = n;
 
     res.json({
-      global: summarize(null),
-      me: clientId ? summarize(clientId) : null,
-      items: q.items.all().map((row) => ({ ...row, price: ITEM_PRICES[row.item] ?? 0 })),
+      global,
+      me,
+      items: items.map((row) => ({ ...row, price: ITEM_PRICES[row.item] ?? 0 })),
       daily,
       pressure,
-      shame: q.shame.all(),
+      shame,
     });
   });
 
-  r.get('/grievances', (req, res) => {
+  r.get('/grievances', async (req, res) => {
     const limit = Math.round(clamp(Number(req.query.limit) || 24, 1, 60));
-    res.json(q.grievances.all(limit));
+    res.json(await all(SQL.grievances, [limit]));
   });
 
   return r;
 }
-
 export function errorHandler(err, _req, res, _next) {
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON พัง' });

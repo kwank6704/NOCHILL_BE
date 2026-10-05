@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --disable-warning=ExperimentalWarning src/server.js",
-    "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "db:reset": "node --disable-warning=ExperimentalWarning src/reset.js"
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:reset": "node src/reset.js"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "cors": "^2.8.6",
     "express": "^5.2.1"
   }

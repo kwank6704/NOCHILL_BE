@@ -2,9 +2,9 @@
 
 REST API ของ [NO CHILL](https://github.com/kwank6704/NOCHILL) แอปหายใจสาย Anti-Mindfulness
 
-- Express 5 + SQLite ผ่าน `node:sqlite` (มากับ Node ≥ 22.13 ไม่ต้องคอมไพล์ native module)
+- Express 5 + SQLite ผ่าน `@libsql/client` — เครื่องตัวเองใช้ไฟล์ `database/nochill.db`, production ใช้ [Turso](https://turso.tech)
 - `database/schema.sql`, `seed.sql`, `migrations/` — สร้างและ seed ฐานข้อมูลให้เองตอนเปิดครั้งแรก
-- schema เวอร์ชันเก็บใน `PRAGMA user_version` และอัปเกรด DB เก่าให้อัตโนมัติ
+- schema เวอร์ชันเก็บในตาราง `meta` และอัปเกรด DB เก่าให้อัตโนมัติ
 
 ## รัน
 
@@ -18,7 +18,13 @@ npm run db:reset  # ล้างและ seed ใหม่
 |---|---|---|
 | `PORT` | `4000` | |
 | `CORS_ORIGIN` | `http://localhost:3000` | origin ของ frontend |
-| `NOCHILL_DB` | `database/nochill.db` | ไฟล์ฐานข้อมูล |
+| `NOCHILL_DB` | `database/nochill.db` | ไฟล์ฐานข้อมูล (เมื่อไม่ได้ใช้ Turso) |
+| `TURSO_DATABASE_URL` | — | เช่น `libsql://nochill-xxx.turso.io` |
+| `TURSO_AUTH_TOKEN` | — | token ของ Turso |
+
+## Deploy (Vercel)
+
+`api/index.js` + `vercel.json` ทำให้ทั้งแอปรันเป็น serverless function ตั้ง `TURSO_DATABASE_URL` และ `TURSO_AUTH_TOKEN` ใน Vercel → Settings → Environment Variables แล้ว redeploy — ตารางและข้อมูลตัวอย่างจะถูกสร้างให้เองตอนเรียกครั้งแรก ถ้าไม่ตั้ง จะใช้ฐานข้อมูลชั่วคราวใน `/tmp` (รีเซ็ตบ่อย `/api/health` จะบอก `storage: ephemeral`)
 
 ## API
 
