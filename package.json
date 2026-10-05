@@ -9,7 +9,7 @@
     "db:reset": "node src/reset.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
