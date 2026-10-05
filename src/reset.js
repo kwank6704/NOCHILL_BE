@@ -1,6 +1,6 @@
 import { openDb, DB_PATH } from './db.js';
 
-if (process.env.TURSO_DATABASE_URL) {
+if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
   console.error('[db] refusing to reset: TURSO_DATABASE_URL is set (this only resets the local file)');
   process.exit(1);
 }

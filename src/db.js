@@ -16,12 +16,16 @@ const sql = (file) => readFileSync(path.join(DB_DIR, file), 'utf8');
 
 /**
  * Where the data lives:
- *  - TURSO_DATABASE_URL set → Turso (libSQL over HTTP), used in production.
- *  - on Vercel without Turso → a throwaway SQLite file in /tmp (resets on cold start).
+ *  - TURSO_DATABASE_URL + TURSO_AUTH_TOKEN set → Turso (libSQL over HTTP), used in production.
+ *  - on Vercel without both → a throwaway SQLite file in /tmp (resets on cold start).
  *  - otherwise → database/nochill.db on disk.
  */
 function resolveTarget() {
-  if (process.env.TURSO_DATABASE_URL) return { url: process.env.TURSO_DATABASE_URL, storage: 'turso' };
+  const url = process.env.TURSO_DATABASE_URL?.replace(/^﻿/, '').trim();
+  const token = process.env.TURSO_AUTH_TOKEN?.replace(/^﻿/, '').trim();
+  if (url && token) return { url, token, storage: 'turso' };
+  // A URL alone can't authenticate — fall back instead of failing every request.
+  if (url) console.warn('[db] TURSO_DATABASE_URL is set but TURSO_AUTH_TOKEN is missing — not using Turso');
   if (process.env.VERCEL) {
     const file = path.join(tmpdir(), 'nochill.db'); // /tmp is the only writable dir on Vercel
     return { url: `file:${file.replace(/\\/g, '/')}`, storage: 'ephemeral', file };
@@ -155,7 +159,7 @@ export async function openDb({ fresh = false } = {}) {
 
   // Local files use the native SQLite binding; remote URLs use the pure-JS HTTP client.
   const { createClient } = target.file ? await import('@libsql/client/sqlite3') : await import('@libsql/client/http');
-  const db = createClient({ url: target.url, authToken: process.env.TURSO_AUTH_TOKEN, intMode: 'number' });
+  const db = createClient({ url: target.url, authToken: target.token, intMode: 'number' });
   if (target.file) {
     await db.execute('PRAGMA journal_mode = WAL');
     await db.execute('PRAGMA foreign_keys = ON');
